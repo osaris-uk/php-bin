@@ -1,218 +1,161 @@
+# Builds the static PHP (micro.sfx) that osaris-uk/utils packs its binaries with, for macOS and
+# Linux on arm64 and x64, then commits the builds and publishes a release, which PHPacker downloads.
+#
+# Changes from phpacker/php-bin:
+# - adds the pcntl and posix extensions (php-extensions.txt)
+# - builds PHP 8.4 only, for macOS and Linux only
+# - always downloads fresh PHP source and fails unless it built the latest 8.4 patch release
+# - checks each build runs and has every extension
+# - commits and releases all platforms together instead of opening a pull request per build
 name: Build PHP
 
 permissions:
   contents: write
-  pull-requests: write
 
 on:
   schedule:
-    # This will run weekly on Sunday at 00:00 UTC.
-    - cron: "0 0 * * 0"
+    # Monthly, to pick up PHP patch (security) releases.
+    - cron: "0 3 1 * *"
   workflow_dispatch:
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SPC_VERSION: 2.7.7
+  PHP_MINOR: "8.4"
 
 jobs:
   build:
-    name: ${{ matrix.version }} ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: PHP ${{ matrix.target.build_os }} ${{ matrix.target.arch }}
+    runs-on: ${{ matrix.target.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        version: ["8.2", "8.3", "8.4", "8.5"]
-        os:
-          [
-            "macos-latest",
-            "macos-15-intel",
-            "windows-latest",
-            "ubuntu-latest",
-            "ubuntu-24.04-arm",
-          ]
-
-    continue-on-error: true
+        target:
+          - { os: macos-latest, spc: macos-aarch64, build_os: mac, arch: arm64 }
+          - { os: macos-15-intel, spc: macos-x86_64, build_os: mac, arch: x64 }
+          - { os: ubuntu-latest, spc: linux-x86_64, build_os: linux, arch: x64 }
+          - { os: ubuntu-24.04-arm, spc: linux-aarch64, build_os: linux, arch: arm64 }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Set SPC binary name
-        shell: bash
-        run: echo "SPC_BINARY=spc" >> $GITHUB_ENV
-
-      - name: Set SPC URL for macos-15-intel
-        shell: bash
-        if: matrix.os == 'macos-15-intel'
-        run: echo "SPC_URL=https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/spc-macos-x86_64.tar.gz" >> $GITHUB_ENV
-
-      - name: Set SPC URL for macos-latest
-        shell: bash
-        if: matrix.os == 'macos-latest'
-        run: echo "SPC_URL=https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/spc-macos-aarch64.tar.gz" >> $GITHUB_ENV
-
-      - name: Set SPC URL for ubuntu-latest and ubuntu-24.04
-        shell: bash
-        if: matrix.os == 'ubuntu-latest'
-        run: echo "SPC_URL=https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/spc-linux-x86_64.tar.gz" >> $GITHUB_ENV
-
-      - name: Set SPC URL for ubuntu-24.04-arm
-        shell: bash
-        if: matrix.os == 'ubuntu-24.04-arm'
-        run: echo "SPC_URL=https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/spc-linux-aarch64.tar.gz" >> $GITHUB_ENV
-
-      - name: Set SPC URL for windows-latest
-        shell: bash
-        if: matrix.os == 'windows-latest'
+      - name: Find the latest PHP ${{ env.PHP_MINOR }} release
         run: |
-          echo "SPC_URL=https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/spc-windows-x64.exe" >> $GITHUB_ENV
-          echo "SPC_BINARY=spc.exe" >> $GITHUB_ENV
+          latest=$(curl -fsS "https://www.php.net/releases/?json&version=${PHP_MINOR}" | php -r 'echo json_decode(stream_get_contents(STDIN), true)["version"];')
+          echo "Latest PHP ${PHP_MINOR} release: ${latest}"
+          echo "PHP_LATEST=${latest}" >> "$GITHUB_ENV"
 
-      - name: Download SPC
-        shell: bash
+      - name: Download static-php-cli
         run: |
-          cd ..
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            curl -fsSL -o ${{ env.SPC_BINARY }} ${{ env.SPC_URL }}
-          else
-            curl -fsSL -o ${{ env.SPC_BINARY }}.tar.gz ${{ env.SPC_URL }}
-            tar -xzf ${{ env.SPC_BINARY }}.tar.gz
-          fi
-          chmod +x ${{ env.SPC_BINARY }}
-          [ ! -d static-php-cli/bin ] && mkdir -p static-php-cli/bin
-          mv ${{ env.SPC_BINARY }} static-php-cli/bin/
+          mkdir -p ../static-php-cli/bin
+          curl -fsSL "https://github.com/crazywhalecc/static-php-cli/releases/download/${SPC_VERSION}/spc-${{ matrix.target.spc }}.tar.gz" \
+            | tar -xz -C ../static-php-cli/bin
+          chmod +x ../static-php-cli/bin/spc
 
-      - name: Create php-bin directory
-        shell: bash
-        run: |
-          cd ..
-          [ ! -d php-bin ] && mkdir -p php-bin
-          cd php-bin
+      - if: runner.os == 'macOS'
+        run: brew install automake gzip
 
-      - shell: bash
-        run: |
-          PHP_VERSION=$(echo "${{ matrix.version }}" | cut -d. -f1,2)
-          echo "PHP_VERSION=$PHP_VERSION" >> $GITHUB_ENV
-
-      - shell: bash
-        run: echo "SPC_BUILD_ARCH=x64" >> $GITHUB_ENV
-
-      - shell: bash
-        if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: echo "SPC_BUILD_ARCH=arm64" >> $GITHUB_ENV
-
-      - shell: bash
-        if: contains(matrix.os, 'macos')
-        run: |
-          brew install automake gzip
-          echo "SPC_BUILD_OS=mac" >> $GITHUB_ENV
-
-      - shell: bash
-        if: matrix.os == 'windows-latest'
-        run: echo "SPC_BUILD_OS=win" >> $GITHUB_ENV
-
-      - shell: bash
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: echo "SPC_BUILD_OS=linux" >> $GITHUB_ENV
-
-      - name: Setup system PHP
-        uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@v2
         with:
-          php-version: 8.2
+          php-version: "8.4"
           tools: pecl, composer
           extensions: curl, openssl, mbstring, sodium, tokenizer
           ini-values: memory_limit=-1
 
-      - name: SPC doctor
+      - name: Read PHP extensions
+        run: echo "PHP_EXTENSIONS=$(tr -d '[:space:]' < php-extensions.txt)" >> "$GITHUB_ENV"
+
+      # No download cache on purpose: a cached PHP source would pin an old patch release.
+      - name: Download PHP and extension sources
         run: |
           cd ../static-php-cli
-          ./bin/${{ env.SPC_BINARY }} doctor
-          cd ../php-bin
+          ./bin/spc doctor
+          ./bin/spc download --with-php="${PHP_MINOR}" --for-extensions "${PHP_EXTENSIONS}" --prefer-pre-built --retry=3
 
-      - name: Read PHP extensions from file
-        id: read-extensions
-        shell: bash
-        run: |
-          EXTENSIONS=$(php -r "echo trim(file_get_contents('php-extensions.txt'));")
-          EXT_HASH=$(php -r "echo md5(getenv('EXTENSIONS'));")
-          echo "PHP_EXTENSIONS=$EXTENSIONS" >> $GITHUB_ENV
-          echo "PHP_EXT_HASH=$EXT_HASH" >> $GITHUB_ENV
-
-      # Cache downloaded source
-      - id: cache-spc-downloads
-        uses: actions/cache@v4
-        with:
-          path: ../static-php-cli/downloads
-          key: spc-downloads-${{ env.PHP_EXT_HASH }}
-
-      - name: Download PHP extension sources
-        if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
+      - name: Build PHP
         run: |
           cd ../static-php-cli
-          ./bin/${{ env.SPC_BINARY }} download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built --retry=3
-          cd ../php-bin
+          ./bin/spc build --build-micro "${PHP_EXTENSIONS}" --debug
+          echo "PHP_VERSION_FULL=$(./bin/spc dev:php-version)" >> "$GITHUB_ENV"
 
-      - name: Copy icon file for Windows builds
-        if: matrix.os == 'windows-latest'
-        shell: bash
+      - name: Check it built the latest PHP ${{ env.PHP_MINOR }} release
         run: |
-          cp assets/icon.ico ../static-php-cli/
-
-      - name: Build PHP (non-Windows)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd ../static-php-cli
-          ./bin/${{ env.SPC_BINARY }} build --build-micro "${{ env.PHP_EXTENSIONS }}" --debug
-          cd ../php-bin
-
-      - name: Build PHP (Windows with custom icon)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd ../static-php-cli
-          ./bin/${{ env.SPC_BINARY }} build --build-micro "${{ env.PHP_EXTENSIONS }}" --debug --with-micro-logo=icon.ico
-          cd ../php-bin
-
-      - name: Get built PHP version
-        shell: bash
-        run: |
-          cd ../static-php-cli
-          PHP_VERSION_FULL=$(./bin/${{ env.SPC_BINARY }} dev:php-version)
-          echo "PHP_VERSION_FULL=$PHP_VERSION_FULL" >> $GITHUB_ENV
-          cd ../php-bin
-
-      - name: Create bin directories
-        shell: bash
-        run: |
-          mkdir -p bin/${{ env.SPC_BUILD_OS }}/${{ env.SPC_BUILD_ARCH }}
-          mkdir -p license-files
-          mkdir -p build-meta
-
-      - name: Zip PHP binary, copy metadata
-        shell: bash
-        run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            powershell Compress-Archive -Path "../static-php-cli/buildroot/bin/micro.sfx" -DestinationPath "bin/${{ env.SPC_BUILD_OS }}/${{ env.SPC_BUILD_ARCH }}/php-${{ env.PHP_VERSION }}.zip" -Force
-          else
-            rm -f bin/${{ env.SPC_BUILD_OS }}/${{ env.SPC_BUILD_ARCH }}/php-${{ env.PHP_VERSION }}.zip
-            mkdir -p tmp-bin
-            cp ../static-php-cli/buildroot/bin/micro.sfx tmp-bin/
-            cd tmp-bin
-            zip ../bin/${{ env.SPC_BUILD_OS }}/${{ env.SPC_BUILD_ARCH }}/php-${{ env.PHP_VERSION }}.zip micro.sfx
-            cd ..
-            rm -rf tmp-bin
+          if [ "${PHP_VERSION_FULL}" != "${PHP_LATEST}" ]; then
+            echo "::error::Built PHP ${PHP_VERSION_FULL}, but the latest ${PHP_MINOR} release is ${PHP_LATEST}"
+            exit 1
           fi
-          cp ../static-php-cli/buildroot/license/* license-files/
-          cp ../static-php-cli/buildroot/build-extensions.json build-meta/build-extensions-${{ env.SPC_BUILD_OS }}.json
-          cp ../static-php-cli/buildroot/build-libraries.json build-meta/build-libraries-${{ env.SPC_BUILD_OS }}.json
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+      - name: Check the build runs and has every extension
+        run: |
+          cat > check.php <<'PHP'
+          <?php
+          // Some names in php-extensions.txt aren't what extension_loaded() knows them by.
+          $loaded = fn (string $e) => match ($e) {
+              'opcache' => extension_loaded('Zend OPcache'),
+              'mbregex' => function_exists('mb_ereg'),
+              default => extension_loaded($e),
+          };
+          $missing = array_filter(explode(',', getenv('PHP_EXTENSIONS')), fn ($e) => ! $loaded($e));
+          if ($missing) {
+              fwrite(STDERR, 'Missing extensions: ' . implode(', ', $missing) . PHP_EOL);
+              exit(1);
+          }
+          echo 'PHP ', PHP_VERSION, ' has ', getenv('PHP_EXTENSIONS'), PHP_EOL;
+          PHP
+          cat ../static-php-cli/buildroot/bin/micro.sfx check.php > check
+          chmod +x check
+          ./check
+          rm check check.php
+
+      - name: Package
+        run: |
+          dir="bin/${{ matrix.target.build_os }}/${{ matrix.target.arch }}"
+          meta="${{ matrix.target.build_os }}-${{ matrix.target.arch }}"
+          mkdir -p "$dir" license-files build-meta
+          rm -f "$dir/php-${PHP_MINOR}.zip"
+          (cd ../static-php-cli/buildroot/bin && zip "$GITHUB_WORKSPACE/$dir/php-${PHP_MINOR}.zip" micro.sfx)
+          cp ../static-php-cli/buildroot/license/* license-files/
+          cp ../static-php-cli/buildroot/build-extensions.json "build-meta/build-extensions-${meta}.json"
+          cp ../static-php-cli/buildroot/build-libraries.json "build-meta/build-libraries-${meta}.json"
+          echo "${PHP_VERSION_FULL}" > "build-meta/php-version-${meta}.txt"
+
+      - uses: actions/upload-artifact@v4
         with:
-          branch: update-php-${{ env.PHP_VERSION }}-${{ env.SPC_BUILD_OS }}-${{ env.SPC_BUILD_ARCH }}
-          title: "Update PHP ${{ env.PHP_VERSION }} build for ${{ env.SPC_BUILD_OS }} ${{ env.SPC_BUILD_ARCH }}"
-          commit-message: "build"
-          body: |
-            PHP: ${{ env.PHP_VERSION_FULL }}
-            Exts: ${{ env.PHP_EXTENSIONS }}
-            OS: ${{ env.SPC_BUILD_OS }}
-            Arch: ${{ env.SPC_BUILD_ARCH }}
-          base: main
+          name: php-${{ matrix.target.build_os }}-${{ matrix.target.arch }}
+          path: |
+            bin/${{ matrix.target.build_os }}/${{ matrix.target.arch }}/php-${{ env.PHP_MINOR }}.zip
+            license-files
+            build-meta
+
+  release:
+    # Only runs when every platform built, so a release always has all four.
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: php-*
+          merge-multiple: true
+
+      - name: Commit the builds
+        run: |
+          version=$(cat build-meta/php-version-linux-x64.txt)
+          echo "PHP_VERSION_FULL=${version}" >> "$GITHUB_ENV"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin license-files build-meta
+          git commit -m "Build PHP ${version}" || echo "No changes to commit"
+          git push
+
+      - name: Publish a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="php-${PHP_VERSION_FULL}-${{ github.run_number }}"
+          gh release create "$tag" \
+            --target "$(git rev-parse HEAD)" \
+            --title "PHP ${PHP_VERSION_FULL}" \
+            --notes "PHP ${PHP_VERSION_FULL} (micro.sfx) for macOS and Linux, arm64 and x64, with: $(tr -d '[:space:]' < php-extensions.txt)"

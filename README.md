@@ -1,3 +1,21 @@
+# osaris-uk/php-bin
+
+Static PHP builds for packing [osaris](https://github.com/osaris-uk/utils) into standalone binaries with
+[PHPacker](https://github.com/phpacker/phpacker). Forked from
+[phpacker/php-bin](https://github.com/phpacker/php-bin), which is itself a fork of
+[NativePHP/php-bin](https://github.com/NativePHP/php-bin).
+
+Differences from phpacker/php-bin:
+
+- Adds the `pcntl` and `posix` extensions (see `php-extensions.txt`).
+- Builds PHP 8.4 only, for macOS and Linux (arm64 and x64); no Windows.
+- Always builds the latest 8.4 patch release, and fails rather than release anything older.
+- The `Build PHP` workflow runs monthly (or by hand from the Actions tab), checks each build runs
+  with every extension, then commits the builds and publishes a release. PHPacker uses the latest
+  release, e.g. `phpacker build --repository=osaris-uk/php-bin`.
+
+---
+
 # PHPacker binaries
 
 This is a fork of [NativePHP php-bin](https://github.com/NativePHP/php-bin) targeting the [micro SAPI](https://github.com/easysoft/phpmicro)
