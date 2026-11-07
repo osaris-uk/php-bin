@@ -41,7 +41,7 @@ jobs:
 
       - name: Find the latest PHP ${{ env.PHP_MINOR }} release
         run: |
-          latest=$(curl -fsS "https://www.php.net/releases/?json&version=${PHP_MINOR}" | php -r 'echo json_decode(stream_get_contents(STDIN), true)["version"];')
+          latest=$(curl -fsS "https://www.php.net/releases/?json&version=${PHP_MINOR}" | jq -r .version)
           echo "Latest PHP ${PHP_MINOR} release: ${latest}"
           echo "PHP_LATEST=${latest}" >> "$GITHUB_ENV"
 
@@ -119,7 +119,7 @@ jobs:
           cp ../static-php-cli/buildroot/build-libraries.json "build-meta/build-libraries-${meta}.json"
           echo "${PHP_VERSION_FULL}" > "build-meta/php-version-${meta}.txt"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: php-${{ matrix.target.build_os }}-${{ matrix.target.arch }}
           path: |
@@ -135,7 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: php-*
           merge-multiple: true
