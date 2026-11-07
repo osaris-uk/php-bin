@@ -19,6 +19,9 @@ on:
   workflow_dispatch:
 
 env:
+  # static-php-cli reads GitHub's API for sources and pre-built libraries; anonymous requests get
+  # rate limited (403) on shared runners.
+  GITHUB_TOKEN: ${{ github.token }}
   SPC_VERSION: 2.7.7
   PHP_MINOR: "8.4"
 
